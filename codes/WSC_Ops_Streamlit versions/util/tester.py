@@ -1,0 +1,33 @@
+import pyodbc as pdo
+import pandas as pd
+
+conn =pdo.connect('DSN=OAKWLVP6;UID=wscrigadvisor;PWD=Winter%2022')
+cursor = conn.cursor()
+query = """
+    WITH CTE_WH AS (
+	SELECT 
+		W.IDWELL
+		,W.USERTXT2 PADNAME
+		,W.WELLNAME
+		,w.CURRENTWELLSTATUS1 WELL_TYPE
+		,W.FIELDOFFICE 
+		,W.GOVAUTHORITY 
+		,W.OPERATED 
+		,W.OPERATOR 
+		,W.DTTMSPUD SPUD_DATE
+		,W.DTTMRR AS RIG_RELEASE
+		,W.LATITUDE 
+		,W.LONGITUDE 
+		,W.TDCALC EST_TD
+	FROM WV103CALCUNITSUS.WVWELLHEADER w
+	WHERE 
+		W.DIVISION IN ('ALASKA')
+		AND W.DTTMSPUD > TO_DATE('01-JAN-1999','DD-MON-YYYY','NLS_DATE_LANGUAGE=ENGLISH')
+	ORDER BY 
+		w.WELLNAME asc
+    )
+    SELECT * FROM CTE_WH 
+"""
+
+df = pd.read_sql_query(query,conn)
+print(df)

@@ -1,0 +1,455 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import io
+from scipy.interpolate import CubicSpline
+import warnings
+import plotly.graph_objects as go
+warnings.simplefilter(action='ignore', category=FutureWarning)
+pd.options.display.float_format = '{:.4f}'.format
+import welleng as we
+from welleng import survey, connector
+
+# App config --------------------------------------------------------
+st.set_page_config(
+    page_title="Interpolator App",
+    page_icon="earth_america",
+    layout="wide",
+    # initial_sidebar_state="collapsed"
+)
+
+# Globals -----------------------------------------------------------
+DF_IN = pd.DataFrame({
+    "Measured Depth": [0,0,0],
+    "Inclination": [0,0,0],
+    "Azimuth": [0,0,0],
+})
+DF_OUT = pd.DataFrame()
+
+# Set DF_IN Types -------------------------------
+DF_IN['Measured Depth'] = DF_IN['Measured Depth'].astype('float')
+DF_IN['Inclination'] = DF_IN['Inclination'].astype('float')
+DF_IN['Azimuth'] = DF_IN['Azimuth'].astype('float')
+
+# Session state variables -------------------------------------------
+# DF storage vars -------------------------------
+if "df_in" not in st.session_state:
+    st.session_state['df_in'] = pd.DataFrame()
+if "df_out" not in st.session_state:
+    st.session_state['df_out'] = pd.DataFrame()
+if "df_tmp" not in st.session_state:
+    st.session_state['df_tmp'] = pd.DataFrame()
+
+# MD Input/Storage vars -------------------------
+if "single_md_value" not in st.session_state:
+    st.session_state["single_md_value"] = 0
+if "min_md_value" not in st.session_state:
+    st.session_state["min_md_value"] = 0
+if "max_md_value" not in st.session_state:
+    st.session_state["max_md_value"] = 0
+
+# TVD Input/Storage vars ------------------------
+if "single_tvd_value" not in st.session_state:
+    st.session_state["single_tvd_value"] = 0
+if "min_tvd_value" not in st.session_state:
+    st.session_state["min_tvd_value"] = 0
+if "max_tvd_value" not in st.session_state:
+    st.session_state["max_tvd_value"] = 0
+
+if "well_name" not in st.session_state:
+    st.session_state["well_name"] = ""
+if "dt" not in st.session_state:
+    st.session_state["dt"] = '1900-01-01'
+if "vsa" not in st.session_state:
+    st.session_state["vsa"] = 0
+
+# Classes | Functions -----------------------------------------------
+def calculate_mcm(data):
+    """
+       Calculate Minimum Curvature Method (MCM) parameters from input data using WellEng package
+
+       :param data: pandas DataFrame containing input data with columns 'Measured Depth', 'Inclination', and 'Azimuth'
+       :return: pandas DataFrame with additional columns 'TVD', 'VS', 'Northings', 'Eastings', and 'DLS'
+       """
+    try:
+        # Create survey header # todo: fix hard coded 
+        srvy_hdr = survey.SurveyHeader(
+            name = st.session_state["well_name"],
+            survey_date= str(st.session_state["dt"]),
+            vertical_section_azimuth=st.session_state["vsa"],
+            )
+        # Create survey object
+        surveys = survey.Survey(
+              md = data['Measured Depth'].to_list(),
+              inc= data['Inclination'].to_list(),
+              azi= data['Azimuth'].to_list(),
+              header=srvy_hdr
+            )
+
+        df = pd.DataFrame()
+        df['Measured Depth'] = surveys.md
+        df['Inclination'] = surveys.inc_deg
+        df['Azimuth'] = surveys.azi_true_deg
+        df['Tvd'] = surveys.tvd
+        df['Northings'] = surveys.n
+        df['Eastings'] = surveys.e
+        df['Vs'] = surveys.vertical_section
+        df['Dls'] = np.rad2deg(surveys.dogleg)
+        
+        return df
+    
+    except Exception as e:
+        print(f"WellEng Error: {e}")
+        return pd.DataFrame()
+
+def interpolate_survey_cubic_spline(data, steps=1):
+    """
+    Interpolate the given survey data using Cubic Spline interpolation.
+
+    Parameters:
+    data (pd.DataFrame): Input data with columns 'Measured Depth', 'Inclination', and 'Azimuth'
+    steps (int): Desired step size for the interpolated data (default: 1)
+
+    Returns:
+    pd.DataFrame: Interpolated data with additional columns
+    """
+    try:
+        
+        # Make copy of the data and fill NA's
+        data = data.copy()
+        data = data.fillna(0)
+
+        # Check for infinite values in the data
+        if not np.all(np.isfinite(data)):
+            raise ValueError("Input data contains infinite values")
+
+        md = data['Measured Depth'].values
+        inc = data['Inclination'].values
+        azi = data['Azimuth'].values
+        tvd = data['Tvd'].values
+        vs = data['Vs'].values
+        ns = data['Northings'].values
+        ew = data['Eastings'].values
+        dls = data['Dls'].values
+
+        # Create the new measured depth array with the desired step size
+        new_md = np.arange(md.min(), md.max() + steps, steps)
+
+        # Create the CubicSpline interpolator
+        inc_spline = CubicSpline(md, inc)
+        azi_spline = CubicSpline(md, azi)
+        tvd_spline = CubicSpline(md, tvd)
+        vs_spline = CubicSpline(md, vs)
+        ns_spline = CubicSpline(md, ns)
+        ew_spline = CubicSpline(md, ew)
+        dls_spline = CubicSpline(md, dls)
+
+        # Interpolate values with Scipy-CubicSpline
+        new_inc = inc_spline(new_md)
+        new_azi = azi_spline(new_md)
+        new_tvd = tvd_spline(new_md)
+        new_vs = vs_spline(new_md)
+        new_ns = ns_spline(new_md)
+        new_ew = ew_spline(new_md)
+        new_dls = dls_spline(new_md)
+
+        # Create a new DataFrame with the interpolated values
+        return pd.DataFrame(
+            {'MD': new_md,
+             'Inc': new_inc,
+             'Azi': new_azi,
+             'Tvd': new_tvd,
+             'Vs': new_vs,
+             'Ns': new_ns,
+             'Ew': new_ew,
+             'Dls': np.clip(new_dls, 0, None),
+             }
+        )
+
+    except Exception as e:
+        print(f"Cubic Spline Error: {e}")
+        return pd.DataFrame()
+
+def plot_surveys(df1, df2):
+    try:
+        hover_template = (
+            "<br><b>Md:</b> %{customdata[0]:.2f}<br>"
+            "<b>Inc:</b> %{customdata[1]:.2f}°<br>"
+            "<b>Azi:</b> %{customdata[2]:.2f}<br>"
+            "<b>Tvd:</b> %{customdata[3]:.2f}<br>"
+            "<b>Vs:</b> %{customdata[4]:.2f}<br>"
+            "<b>Ns:</b> %{customdata[5]:.2f}<br>"
+            "<b>Ew:</b> %{customdata[6]:.2f}<br>"
+            "<b>Dls:</b> %{customdata[7]:.2f}°<br>"
+            "------"
+        )
+
+        # Original surveys
+        trace1 = go.Scatter(
+            x=df1["Vs"],
+            y=df1["Tvd"] * -1,
+            mode="markers+lines",
+            name="Original Surveys",
+            line=dict(color="rgba(211, 211, 211, 0.8)", width=6),  # light grey color with 60% transparency
+            marker=dict(color="rgba(68, 68, 68, 1)", size=8, symbol='circle-cross-open'),
+            customdata=df1[['Measured Depth', 'Inclination', 'Azimuth', 'Tvd', 'Vs', 'Northings', 'Eastings', 'Dls']],
+            hovertemplate = hover_template,
+        )
+
+        # Interpolated surveys
+        trace2 = go.Scatter(
+            x=df2["Vs"],
+            y=df2["Tvd"] * -1,
+            mode="markers",
+            name="Interpolated Surveys",
+            line=dict(color="blue"),
+            marker=dict(color="blue", size=5),
+            customdata=df2[['MD', 'Inc', 'Azi', 'Tvd', 'Vs', 'Ns', 'Ew', 'Dls']],
+            hovertemplate = hover_template,
+        )
+
+        # Combine traces and create the layout
+        data = [trace1, trace2]
+        layout = go.Layout(
+            # title="Original vs. Interpolated Surveys",
+            legend=dict(x=0.5, y=-0.1, xanchor="center", yanchor="top"),
+            height = 550,
+            xaxis=dict(title="VS"),
+            yaxis=dict(title="TVD")
+        )
+
+        # Create the figure
+        fig = go.Figure(data=data, layout=layout)
+        fig.update_layout(
+            hovermode="x unified",
+            margin = dict(l=10, r=10, t=10, b=50),
+        )
+        fig.add_vline(0, line=dict(color="rgba(211, 211, 211, 0.5)", width=2))
+        fig.add_hline(0, line=dict(color="rgba(211, 211, 211, 0.5)", width=2))
+
+        return fig
+    except:
+        layout = go.Layout(
+            # title="Original vs. Interpolated Surveys",
+            height=550,
+            xaxis=dict(title="Vs"),
+            yaxis=dict(title="Tvd")
+        )
+        fig = go.Figure(layout=layout)
+        fig.add_vline(0, line=dict(color="rgba(211, 211, 211, 0.5)", width=2))
+        fig.add_hline(0, line=dict(color="rgba(211, 211, 211, 0.5)", width=2))
+        return fig
+
+def download_surveys(name, typ, df):
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+    csv_str = csv_buffer.getvalue()
+    label = f"Download - Original Survey File" if typ == 0 else f"Download - Interpolated Survey File"
+    file_name = f"{name}_Original_Surveys.csv" if typ == 0 else f"{name}_Interpolated_Surveys.csv"
+
+    # Return a download button to download the CSV
+    return st.download_button(
+        label=label,
+        data=csv_str,
+        file_name=file_name,
+        mime="text/csv"
+    )
+
+def reset_all():
+    st.session_state['df_in'] = pd.DataFrame()
+    st.session_state['df_out'] = pd.DataFrame()
+    st.session_state['df_tmp'] = pd.DataFrame()
+
+    # MD Input/Storage vars -------------------------
+    st.session_state["single_md_value"] = 0
+    st.session_state["min_md_value"] = 0
+    st.session_state["max_md_value"] = 0
+
+    # TVD Input/Storage vars ------------------------
+    st.session_state["single_tvd_value"] = 0
+    st.session_state["min_tvd_value"] = 0
+    st.session_state["max_tvd_value"] = 0
+
+# Create sidebar ----------------------------------------------------
+sb = st.sidebar
+
+# Create components -------------------------------------------------
+cnt_header = st.container()
+cnt_body = st.container()
+cnt_md = st.container()
+cnt_tvd = st.container()
+
+# Header container --------------------------------------------------
+with cnt_header:
+    c1, c2 = st.columns([0.85, 0.15])
+    with c1:
+        st.header(":earth_americas: WSC - Interpolator App")
+        st.markdown('''To use this app simply copy/paste your survey data :red[[Measured Depth, Inclination, Azimuth]] into the 
+        dynamic table below, then use thed input fields to filter/adjust the interpolated data as necessary''')
+        st.caption('''**:zap: Note:** This app is only designed to assist in interpolating MD or TVD values and it is not a
+                   substitute or replacement for Compass or other directional software.''')
+    with c2:
+        st.image('static/conoco_logo.png', width=225)
+    st.divider()
+
+# Body container ----------------------------------------------------
+with cnt_body:
+    c11, c12, c13 = st.columns([0.30, 0.36, 0.34], gap='small')
+    # Step 1 - Copy/Paste surveys
+    with c11:
+        st.markdown("#### :one: Step 1 - Get the data")
+        st.caption('**Fill in the boxes below then**')
+        st.caption('**Copy and paste your survey data below **[MD, Inc, Azi]**')
+        cnt_msg1 = st.empty()
+        
+        nm, dt = c11.columns([0.5,0.5])
+        st.session_state["well_name"] = nm.text_input('Well Name')
+        st.session_state["dt"] = dt.date_input('Date')
+        st.session_state["vsa"] = c11.number_input('Vertical Section Direction')
+
+        if st.button("Clear | Reset", use_container_width=True, type='secondary'):
+            reset_all()
+            st.experimental_rerun()
+
+        # Dynamic dataframe editor -> returns the edited dataframe
+        tmp_DF_IN = st.experimental_data_editor(DF_IN, use_container_width=True, num_rows='dynamic')
+        st.session_state['df_in'] = tmp_DF_IN.fillna(0)
+        st.session_state['df_tmp'] = calculate_mcm(tmp_DF_IN.fillna(0))
+        # Test
+        # tmp_DF_IN
+        # st.session_state['df_in']
+        
+        # On submit -> sets edited DF_OUT as global dataframe for use later
+        btn_submit = st.button('Submit', use_container_width=True, type='primary')
+        if btn_submit:
+            st.session_state['df_out'] = interpolate_survey_cubic_spline(calculate_mcm(tmp_DF_IN))
+            # DF_OUT
+            # st.session_state['df_out']
+            DF_OUT = st.session_state['df_out']
+            cnt_msg1.success('Success, Surveys Submitted!')
+
+    # Step 2 - Adjust filtering/fields
+    with c12:
+        st.markdown("#### :two: Step 2 - Look up value or by range")
+        st.caption('**Make the selections per your requirements below:**')
+
+        # Swap MD <--> TVD Components based on radio control
+        rdo_interpolate_by = c12.radio('**:red[Solve using:]**', ('Measured Depth', 'True Vertical Depth'),
+                                    horizontal=True, key='rdo_interpolate_by')
+
+        if rdo_interpolate_by == 'Measured Depth':
+            tmp_DF = st.session_state['df_out'].copy()
+            if tmp_DF is not None and len(tmp_DF) > 0:
+                tmp_DF['MD'] = np.int64(tmp_DF['MD']) #truncate decimal precision for lookup reasons
+                
+            with cnt_md:
+                if tmp_DF is not None:
+                    rdo_md_swap = c12.radio('**:red[Look up by:]**', ('Single Value', 'Range of Values'),
+                                            horizontal=True, key='rdo_md_swap')
+
+                    # If radio is MD single value else MD range of values
+                    if rdo_md_swap == 'Single Value':
+                        MD_SINGLE = c12.number_input('Single - Measured Depth (Md)', key='single_md_input')
+                        st.session_state["single_md_value"] = MD_SINGLE
+                        try:
+                            tmp_DF = np.round(tmp_DF, 2)
+                            tmp_DF['MD'] = np.round(tmp_DF['MD'], 0)
+                            if MD_SINGLE is not None and MD_SINGLE > 0:
+                                c12.write('Filtered results by value')
+                                c12.table(tmp_DF[(round(tmp_DF['MD'], 0) == round(MD_SINGLE,0))])
+                        except BaseException as e:
+                            pass
+                            # st.write(e)
+
+                    else:
+                        c111, c112 = c12.columns([0.5, 0.5])
+                        MD_MIN = c111.number_input('Min - Measured Depth (Md)', key='min_md_input')
+                        st.session_state["min_md_value"] = MD_MIN
+
+                        MD_MAX = c112.number_input('Max - Measured Depth (Md)', key='max_md_input')
+                        st.session_state["max_md_value"] = MD_MAX
+
+                        try:
+                            tmp_DF = np.round(tmp_DF, 2)
+                            tmp_DF['MD'] = np.round(tmp_DF['MD'],0)
+                            if MD_MIN is not None and MD_MAX is not None and MD_MIN > 0 and MD_MAX > 0 :
+                                c12.write('Filtered results by range')
+                                c12.table(tmp_DF[(round(tmp_DF['MD'], 0) >= round(MD_MIN,0)) & (round(tmp_DF['MD'], 0) <= round(MD_MAX,0))])
+                        except BaseException as e:
+                            pass
+                            # st.write(e)
+
+        if rdo_interpolate_by == 'True Vertical Depth':
+            tmp_DF = st.session_state['df_out'].copy()
+            if tmp_DF is not None and len(tmp_DF) > 0:
+                tmp_DF['Tvd'] = np.int64(tmp_DF['Tvd']) #truncate decimal precision for lookup reasons
+                
+            with cnt_tvd:
+                if DF_OUT is not None:
+                    rdo_tvd_swap = c12.radio('Look up by:', ('Single Value', 'Range of Values'), horizontal=True, key='rdo_tvd_swap')
+
+                    # Get TVD single value else get range values
+                    if rdo_tvd_swap == 'Single Value':
+                        TVD_SINGLE = c12.number_input('Single - True Vertical Depth (Tvd)', key='single_tvd_input')
+                        st.session_state["single_tvd_value"] = TVD_SINGLE
+                        try:
+                            tmp_DF = np.round(tmp_DF, 2)
+                            if TVD_SINGLE is not None and TVD_SINGLE > 0:
+                                c12.write('Filtered results by value')
+                                c12.table(tmp_DF[(round(tmp_DF['Tvd'], 0) == TVD_SINGLE)])
+                        except BaseException as e:
+                            pass # st.write(e)
+                    else:
+                        c121, c122 = c12.columns([0.5, 0.5])
+                        TVD_MIN = c121.number_input('Min -  True Vertical Depth (Tvd)', key='min_tvd_input')
+                        st.session_state["min_tvd_value"] = TVD_MIN
+
+                        TVD_MAX = c122.number_input('Max -  True Vertical Depth (Tvd)', key='max_tvd_input')
+                        st.session_state["max_tvd_value"] = TVD_MAX
+                        try:
+                            tmp_DF = np.round(tmp_DF, 2)
+                            if TVD_MIN is not None and TVD_MAX is not None and TVD_MIN > 0 and TVD_MAX > 0:
+                                c12.write('Filtered results by range')
+                                c12.table(
+                                    tmp_DF[(round(tmp_DF['Tvd'], 0) >= TVD_MIN) & (round(tmp_DF['Tvd'], 0) <= TVD_MAX)])
+                        except BaseException as e:
+                            pass # st.write(e)
+                else:
+                    output_md_data = c12.empty()
+
+    # Step 3 - Preview/download data
+    with c13:
+        st.markdown("#### :three: Step 3 - Preview Output Data")
+        # Graph compare visual
+        with st.container():
+            c13.plotly_chart(
+                plot_surveys(
+                    df1=st.session_state['df_tmp'],
+                    df2=st.session_state['df_out']
+                ),
+                use_container_width=True
+            )
+
+    # Raw data preview section divider
+    cnt_body.divider()
+
+    # Raw data preview section
+    if st.session_state['df_in'] is not None and len(st.session_state['df_in']) > 0:
+        
+        col_data1, col_data2 = st.columns([0.5, 0.5])
+        with col_data1:
+            # Preview - Original data
+            st.markdown('#### Original Data - Preview Section')
+            with st.expander('Original Data'):
+                # Add a download button for the dataframe
+                download_button = download_surveys("Well", 0, st.session_state['df_in'])
+                st.table(st.session_state['df_in'].fillna(0))
+
+        with col_data2:
+            # Preview Interpolated data
+            st.markdown('#### Interpolated Data - Preview Section')
+            with st.expander('Interpolated Data'):
+                # Add a download button & table
+                download_button = download_surveys("Well", 1, st.session_state['df_out'])
+                st.table(st.session_state['df_out'])
+

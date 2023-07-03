@@ -1,0 +1,55 @@
+/* Style the header */
+#header {
+    position: fixed;
+    top: 0;
+    width: 100%;
+    height: 40px;
+    background:  #fff;
+    color: #262730;
+    padding: 5px;
+    z-index: 10;
+}
+
+/* Style the sidebar */
+#sidebar {
+    position: fixed;
+    top: 0px; /* adjust this value according to the height of your header */
+    left: 0;
+    bottom: 0px; /* adjust this value according to the height of your footer */
+    width: 45px;
+    background: #f0f2f6;
+    overflow: hidden;
+    transition: width 0.3s;
+    padding: 10px;
+    box-shadow: 2px 0 4px 0 rgba(0, 0, 0, .1);
+    border-right: 1px solid transparent;
+    z-index: 1000;
+}
+
+#sidebar:hover {
+    width: 300px;
+    z-index: 1001;
+    border-right: 1px solid darkgrey;
+}
+
+/* Style the footer */
+#footer {
+    position: fixed;
+    bottom: 0;
+    width: 100%;
+    height: 45px;
+    background: #262730;
+    color: #fff;
+    padding: 5px;
+    box-shadow: 0 -2px 4px 0 rgba(0, 0, 0, .1);
+    z-index: 1;
+}
+
+/* Style the main content */
+#body {
+    margin-left: 65px;
+    margin-top: 60px;
+    /* margin-bottom: 60px; */
+    padding-left: 10px;
+    transition: margin-left 0.3s;
+}
