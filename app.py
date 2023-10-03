@@ -11,7 +11,8 @@ from utils.helpers import * # see helpers for details
 app = Dash(
     __name__, 
     use_pages=True,
-    external_stylesheets=[dbc.themes.COSMO,dbc.icons.FONT_AWESOME]
+    external_stylesheets=[dbc.themes.COSMO,
+                          dbc.icons.FONT_AWESOME]
     )
 
 app.config.suppress_callback_exceptions = True

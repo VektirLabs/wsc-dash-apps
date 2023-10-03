@@ -270,6 +270,9 @@ def get_telemetry_data_by_id_date_range(asset_id, start, end) -> pd.DataFrame():
 
     return df_wits
 
+
+
+
 ## Test -------------------------------------------------------------       
 # # Get active well asset ids
 # df_active_headers = get_header_data()
